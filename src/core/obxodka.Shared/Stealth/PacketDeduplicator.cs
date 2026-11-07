@@ -2,13 +2,15 @@ namespace obxodka.Shared.Stealth;
 
 public sealed class PacketDeduplicator
 {
-    private const int RingSize = 16384;
+    //массив для хранения хешей пакетов и их временных меток, используемый для обнаружения дубликатов пакетов. Размер кольца фиксирован и равен 32768, что позволяет эффективно использовать память и обеспечивать быстрый доступ к элементам.
+    private const int RingSize = 32768;
     private const int RingMask = RingSize - 1;
-    private const long MaxDuplicateAgeMs = 500;
+    private const ulong TimeMask = 0xFFFFFUL; //маска для извлечения временной метки из хеша пакета, которая позволяет хранить только младшие 20 битов времени, что обеспечивает достаточную точность для обнаружения дубликатов в пределах 80 миллисекунд.
+    private const ulong MaxDuplicateAgeMs = 80UL; //окно дедупликации в мл сек
 
-    private readonly ulong[] _seenKeys = new ulong[RingSize];
-    private readonly long[] _seenTimestamps = new long[RingSize];
+    private readonly ulong[] _entries = new ulong[RingSize];
 
+    // IsDuplicate проверяет, является ли данный пакет дубликатом, используя хеширование и временные метки. Метод сначала проверяет длину пакета и его версию (IPv4 или IPv6), затем вычисляет хеш пакета с учетом определенных полей заголовка, которые могут изменяться между фрагментами. После этого метод проверяет, был ли пакет уже обработан в пределах окна дедупликации (80 миллисекунд) и возвращает true, если пакет является дубликатом, или false в противном случае.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
     public bool IsDuplicate(ReadOnlySpan<byte> packet)
     {
@@ -21,68 +23,95 @@ public sealed class PacketDeduplicator
         var version = packet[0] >> 4;
         if (version == 4)
         {
-            if (packet[9] == 6)
+            var proto = packet[9];
+            var isDeduplicatable = proto == 1 ||
+                                   (proto == 6 && length <= 256) ||
+                                   (proto == 17 && length <= 1500);
+            if (!isDeduplicatable)
             {
-                var ipHdrLen = (packet[0] & 0x0F) * 4;
-                if (length >= ipHdrLen + 20)
-                {
-                    var tcpHdrLen = ((packet[ipHdrLen + 12] >> 4) & 0x0F) * 4;
-                    if (length <= ipHdrLen + tcpHdrLen)
-                    {
-                        return false;
-                    }
-                }
+                return false;
             }
         }
-        else if (version == 6 && length >= 60)
+        else if (version == 6 && length >= 40)
         {
-            if (packet[6] == 6)
+            var nextHdr = packet[6];
+            var isDeduplicatable = nextHdr == 58 ||
+                                   (nextHdr == 6 && length <= 256) ||
+                                   (nextHdr == 17 && length <= 1500);
+            if (!isDeduplicatable)
             {
-                var tcpHdrLen = ((packet[40 + 12] >> 4) & 0x0F) * 4;
-                if (length <= 40 + tcpHdrLen)
-                {
-                    return false;
-                }
+                return false;
             }
+        }
+        else
+        {
+            return false;
         }
 
-        var key = FastHash64(packet);
+        var key = FastHash64(packet, version);
         var slot = (int)(key & RingMask);
-        var now = Environment.TickCount64;
-
-        var prevKey = Volatile.Read(ref _seenKeys[slot]);
-        var prevTime = Volatile.Read(ref _seenTimestamps[slot]);
-
-        if (prevKey == key && (now - prevTime) < MaxDuplicateAgeMs)
+        var keyTag = key & ~TimeMask;
+        if (keyTag == 0)
         {
-            return true;
+            keyTag = 1UL << 20;
         }
 
-        _seenKeys[slot] = key;
-        _seenTimestamps[slot] = now;
+        var now = (ulong)Environment.TickCount64 & TimeMask;
+        var newEntry = keyTag | now;
+        var prevEntry = Interlocked.Exchange(ref _entries[slot], newEntry);
+
+        if ((prevEntry & ~TimeMask) == keyTag)
+        {
+            var prevTime = prevEntry & TimeMask;
+            var age = (now - prevTime) & TimeMask;
+            if (age < MaxDuplicateAgeMs)
+            {
+                return true;
+            }
+        }
+
         return false;
     }
 
+    //читает память пачками по 8 байт и вычисляет хеш пакета, используя алгоритм FNV-1a. Метод также учитывает определенные поля заголовка IPv4 и IPv6, которые могут изменяться между фрагментами, чтобы обеспечить корректное сравнение пакетов. Хеширование выполняется быстро и эффективно, что позволяет обрабатывать большое количество пакетов в реальном времени.
     [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    public bool IsDuplicate(byte[] packet, int length) => IsDuplicate(packet.AsSpan(0, length));
-
-    [MethodImpl(MethodImplOptions.AggressiveInlining)]
-    private static ulong FastHash64(ReadOnlySpan<byte> data)
+    private static ulong FastHash64(ReadOnlySpan<byte> packet, int version)
     {
         unchecked
         {
-            var hash = 0xCBF29CE484222325UL ^ (ulong)data.Length;
-            var longs = MemoryMarshal.Cast<byte, ulong>(data);
-            for (var i = 0; i < longs.Length; i++)
+            var length = packet.Length;
+            var hash = 0xCBF29CE484222325UL ^ (ulong)length;
+            var longsCount = length / 8;
+
+            for (var i = 0; i < longsCount; i++)
             {
-                hash = (hash ^ longs[i]) * 0x100000001B3UL;
+                var offset = i * 8;
+                var val = BinaryPrimitives.ReadUInt64LittleEndian(packet.Slice(offset, 8));
+                if (version == 4)
+                {
+                    if (offset == 8)
+                    {
+                        val &= ~0x00000000FFFF00FFUL;
+                    }
+                }
+                else if (version == 6)
+                {
+                    if (offset == 0)
+                    {
+                        val &= ~0xFF00000000000000UL;
+                    }
+                }
+
+                hash = (hash ^ val) * 0x100000001B3UL;
                 hash = (hash << 13) | (hash >> 51);
             }
-            var remainder = data[(longs.Length * 8)..];
-            for (var i = 0; i < remainder.Length; i++)
+
+            var remainderOffset = longsCount * 8;
+            for (var i = remainderOffset; i < length; i++)
             {
-                hash = (hash ^ remainder[i]) * 0x100000001B3UL;
+                hash = (hash ^ packet[i]) * 0x100000001B3UL;
             }
+
             return hash;
         }
     }

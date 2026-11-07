@@ -1,4 +1,4 @@
-- Smart adaptive MTU escalation for optimal throughput across all ISPs.
-- Server selection guard during active VPN sessions.
-- Expanded 32-bit and 64-bit support for Android 10+ devices.
-- Tunnel stability improvements and disconnect fixes.
+- Upgraded AdBlock engine: zero-allocation L3 DNS sinkhole, cloud filters auto-sync, and tracker protection.
+- DNS-over-HTTPS bypass protection via DoH Canary domain enforcement.
+- Live blocked ads and telemetry counter on the profile dashboard.
+- Network stack optimization and reduced connection latency.

@@ -23,7 +23,7 @@ public class SerializationBenchmarks
         _telemetry = new TelemetryDto("HWID-ABC-12345678", "4.8.0", "Diagnostic Test Trace", "at obxodka.Engine.Start()");
         _telemetryJson = JsonSerializer.Serialize(_telemetry, BenchmarkJsonContext.Default.TelemetryDto);
 
-        _loginResponse = new LoginResponse("JWT.Sample.Token", "VpnConfigData", "0123456789ABCDEF0123456789ABCDEF01234567", DateTime.UtcNow.AddDays(30), 86400, "user@obxodka.one");
+        _loginResponse = new LoginResponse("JWT.Sample.Token", "VpnConfigData", "0123456789ABCDEF0123456789ABCDEF01234567", DateTime.UtcNow.AddDays(30), 86400, "user@example.com");
         _loginJson = JsonSerializer.Serialize(_loginResponse, BenchmarkJsonContext.Default.LoginResponse);
     }
 

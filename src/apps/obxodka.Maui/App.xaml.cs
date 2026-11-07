@@ -5,13 +5,100 @@ internal sealed partial class App : Application
     public static event Action? AppResumed;
     public static event Action? WindowActivated;
     public static event Action? WindowDeactivated;
+    public static event Action<string, string>? DeepLinkLoginReceived;
+    public static (string Email, string Code)? PendingDeepLinkLogin { get; set; }
     public static bool PendingTileAction { get; set; }
-    private static int t_shutdownInitiated;
+    private static int s_shutdownInitiated;
     public static bool IsShutdownCompleted { get; private set; }
+
+    public static bool TryParseDeepLinkLogin(string? rawUri, out string email, out string code)
+    {
+        email = string.Empty;
+        code = string.Empty;
+        if (string.IsNullOrWhiteSpace(rawUri))
+        {
+            return false;
+        }
+
+        var trimmed = rawUri.Trim().Trim('"');
+        var idx = trimmed.IndexOf("obxodka://", StringComparison.OrdinalIgnoreCase);
+        if (idx > 0)
+        {
+            trimmed = trimmed[idx..];
+        }
+        else
+        {
+            var httpsIdx = trimmed.IndexOf($"https://{AppConfig.PrimaryDomain}/qr", StringComparison.OrdinalIgnoreCase);
+            if (httpsIdx > 0)
+            {
+                trimmed = trimmed[httpsIdx..];
+            }
+        }
+
+        if (!Uri.TryCreate(trimmed, UriKind.Absolute, out var uri))
+        {
+            return false;
+        }
+
+        var isCustomScheme = string.Equals(uri.Scheme, "obxodka", StringComparison.OrdinalIgnoreCase);
+        var isWebQrLink = (string.Equals(uri.Scheme, "https", StringComparison.OrdinalIgnoreCase) ||
+                           string.Equals(uri.Scheme, "http", StringComparison.OrdinalIgnoreCase)) &&
+                          (uri.Host.EndsWith(AppConfig.PrimaryDomain, StringComparison.OrdinalIgnoreCase) ||
+                           uri.Host.EndsWith(AppConfig.MirrorDomain, StringComparison.OrdinalIgnoreCase)) &&
+                          uri.AbsolutePath.StartsWith("/qr", StringComparison.OrdinalIgnoreCase);
+
+        if (!isCustomScheme && !isWebQrLink)
+        {
+            return false;
+        }
+
+        var query = uri.Query;
+        if (string.IsNullOrWhiteSpace(query))
+        {
+            return false;
+        }
+
+        var pairs = query.TrimStart('?').Split('&', StringSplitOptions.RemoveEmptyEntries);
+        foreach (var pair in pairs)
+        {
+            var kv = pair.Split('=', 2);
+            if (kv.Length != 2)
+            {
+                continue;
+            }
+
+            var key = Uri.UnescapeDataString(kv[0]).Trim();
+            var val = Uri.UnescapeDataString(kv[1]).Trim();
+            if (string.Equals(key, "email", StringComparison.OrdinalIgnoreCase))
+            {
+                email = val;
+            }
+            else if (string.Equals(key, "code", StringComparison.OrdinalIgnoreCase))
+            {
+                code = val;
+            }
+        }
+
+        return !string.IsNullOrWhiteSpace(email) &&
+               email.Contains('@') &&
+               code.Length == 6 &&
+               code.All(char.IsAsciiDigit);
+    }
+
+    public static void HandleDeepLink(string? rawUri)
+    {
+        if (!TryParseDeepLinkLogin(rawUri, out var email, out var code))
+        {
+            return;
+        }
+
+        PendingDeepLinkLogin = (email, code);
+        MainThread.BeginInvokeOnMainThread(() => DeepLinkLoginReceived?.Invoke(email, code));
+    }
 
     public static void InitiateGracefulBackgroundShutdown()
     {
-        if (Interlocked.Exchange(ref t_shutdownInitiated, 1) != 0)
+        if (Interlocked.Exchange(ref s_shutdownInitiated, 1) != 0)
         {
             return;
         }
@@ -41,6 +128,28 @@ internal sealed partial class App : Application
     {
         InitializeComponent();
         DnsAdBlocker.IsAdBlockEnabled = Preferences.Default.Get("use_adblock_dns", true);
+        _ = Task.Run(async () => await TelemetryService.Instance.FlushPreviousSessionCrashLogAsync().ConfigureAwait(false));
+        _ = Task.Run(async () =>
+        {
+            try
+            {
+                var cacheFile = Path.Combine(FileSystem.AppDataDirectory, "adblock_rules.txt");
+                _ = await DnsAdBlockRuleManager.LoadFromCacheAsync(cacheFile);
+
+                var lastSyncTicks = Preferences.Default.Get("adblock_last_sync_ticks", 0L);
+                var lastSync = new DateTime(lastSyncTicks, DateTimeKind.Utc);
+                if (DateTime.UtcNow - lastSync > TimeSpan.FromHours(24))
+                {
+                    if (await DnsAdBlockRuleManager.SyncFromRemoteAsync(cacheFilePath: cacheFile))
+                    {
+                        Preferences.Default.Set("adblock_last_sync_ticks", DateTime.UtcNow.Ticks);
+                    }
+                }
+            }
+            catch
+            {
+            }
+        });
     }
 
     public static void HandleTileClick()

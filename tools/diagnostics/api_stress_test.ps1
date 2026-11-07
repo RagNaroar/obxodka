@@ -1,6 +1,6 @@
 # api_stress_test.ps1 - Asynchronous Load & Latency Stress Test
 param(
-    [string]$TargetUrl = "https://obxodka.one/api/Auth/me",
+    [string]$TargetUrl = "https://localhost:5001/api/Auth/me",
     [int]$TotalRequests = 50,
     [int]$Concurrency = 10
 )

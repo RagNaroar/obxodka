@@ -12,14 +12,14 @@ public class AppConfigTests
     }
 
     [Theory]
-    [InlineData("api/Auth/me", "https://obxodka.one/api/Auth/me")]
-    [InlineData("/api/Auth/me", "https://obxodka.one/api/Auth/me")]
-    [InlineData("api/payment/generate", "https://obxodka.one/api/payment/generate")]
+    [InlineData("api/Auth/me", "/api/Auth/me")]
+    [InlineData("/api/Auth/me", "/api/Auth/me")]
+    [InlineData("api/payment/generate", "/api/payment/generate")]
     public void ApiUrlFormatsCorrectly(string endpoint, string expected)
     {
         AppConfig.ApiBaseUrl = AppConfig.DefaultApiBaseUrl;
         var url = AppConfig.ApiUrl(endpoint);
-        Assert.Equal(expected, url);
+        Assert.Equal($"{AppConfig.DefaultApiBaseUrl.TrimEnd('/')}{expected}", url);
     }
 
     [Theory]

@@ -277,7 +277,7 @@ public partial class MainViewModel : ViewModelBase
         {
             try
             {
-                var dt = new DataTransfer();
+                using var dt = new DataTransfer();
                 dt.Add(DataTransferItem.CreateText(IpAddress));
                 await clipboard.SetDataAsync(dt);
             }

@@ -1,5 +1,3 @@
-using obxodka.Client.Security;
-
 namespace obxodka.Client.Tests.Protocols;
 
 [Trait("Category", "Protocol")]
@@ -78,7 +76,7 @@ public class SslCertificateValidationTests
     public void ValidateServerCertificateReturnsFalseWhenObxodkaDomainHasUntrustedChain()
     {
         using var rsa = RSA.Create(2048);
-        var req = new CertificateRequest("cn=obxodka.one", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var req = new CertificateRequest($"cn={AppConfig.PrimaryDomain}", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         using var selfSignedObxodkaCert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10));
 
         var result = CertificateValidator.ValidateServerCertificate(selfSignedObxodkaCert, null, SslPolicyErrors.RemoteCertificateNameMismatch, dynamicPinningHash: "DIFFERENT_HASH==");
@@ -89,7 +87,7 @@ public class SslCertificateValidationTests
     public void ValidateServerCertificateReturnsTrueWhenObxodkaDomainMatchesPinning()
     {
         using var rsa = RSA.Create(2048);
-        var req = new CertificateRequest("cn=obxodka.one", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        var req = new CertificateRequest($"cn={AppConfig.PrimaryDomain}", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
         using var selfSignedObxodkaCert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10));
 
         var pubKey = selfSignedObxodkaCert.GetPublicKey();
@@ -97,6 +95,37 @@ public class SslCertificateValidationTests
 
         var result = CertificateValidator.ValidateServerCertificate(selfSignedObxodkaCert, null, SslPolicyErrors.RemoteCertificateNameMismatch, dynamicPinningHash: expectedHash);
         Assert.True(result);
+    }
+
+    [Fact]
+    public void ValidateServerCertificateReturnsFalseWhenOctopusEnginePinMismatchesAndDynamicPinIsNull()
+    {
+        var prevPin = OctopusEngine.DynamicSslPublicKeyHash;
+        try
+        {
+            OctopusEngine.DynamicSslPublicKeyHash = "DIFFERENT_HASH_IN_OCTOPUS==";
+            using var rsa = RSA.Create(2048);
+            var req = new CertificateRequest($"cn={AppConfig.PrimaryDomain}", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+            using var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10));
+
+            var result = CertificateValidator.ValidateServerCertificate(cert, null, SslPolicyErrors.None, dynamicPinningHash: null);
+            Assert.False(result);
+        }
+        finally
+        {
+            OctopusEngine.DynamicSslPublicKeyHash = prevPin;
+        }
+    }
+
+    [Fact]
+    public void ValidateServerCertificateReturnsFalseWhenSubjectContainsAttackerSuffix()
+    {
+        using var rsa = RSA.Create(2048);
+        var req = new CertificateRequest($"cn={AppConfig.PrimaryDomain}.attacker.com", rsa, HashAlgorithmName.SHA256, RSASignaturePadding.Pkcs1);
+        using var cert = req.CreateSelfSigned(DateTimeOffset.UtcNow.AddDays(-1), DateTimeOffset.UtcNow.AddDays(10));
+
+        var result = CertificateValidator.ValidateServerCertificate(cert, null, SslPolicyErrors.RemoteCertificateNameMismatch, dynamicPinningHash: null);
+        Assert.False(result);
     }
 
     [Fact]
@@ -110,7 +139,7 @@ public class SslCertificateValidationTests
             capturedErrors = errs;
             return CertificateValidator.ValidateServerCertificate(cert, chain, errs, dynamicPinningHash: "xZIbvT6/B+lfJmN4F7NEnEF4uZQYdP5sXDKZqsLQS1U=");
         });
-        await ssl.AuthenticateAsClientAsync("obxodka.one");
+        await ssl.AuthenticateAsClientAsync(AppConfig.PrimaryDomain);
         Assert.True(ssl.IsAuthenticated, $"Auth failed. Errs: {capturedErrors}");
     }
 

@@ -14,7 +14,7 @@ public class StreamTransportWireLevelTests
 
         var transport = new ObxodkaStreamTransport(
             serverPort: port,
-            configuredSni: "obxodka.one"
+            configuredSni: AppConfig.PrimaryDomain
         );
 
         var connectTask = Task.Run(async () =>

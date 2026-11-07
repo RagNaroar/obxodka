@@ -1,24 +1,46 @@
 namespace obxodka.Shared.Themes;
 
+//валидатор манифестов тем оформления, цветов, путей и сигнатур файлов
 public static partial class ThemeValidator
 {
+    //регулярное выражение для проверки 6- и 8-значных hex цветов
     [GeneratedRegex("^#([0-9a-fA-F]{6}|[0-9a-fA-F]{8})$")]
     private static partial Regex HexColorRegex();
 
-    public static bool IsValidHexColor(string? hex) => !string.IsNullOrWhiteSpace(hex) && HexColorRegex().IsMatch(hex.Trim());
+    //проверка валидности hex формата цвета
+    public static bool IsValidHexColor(string? hex) =>
+        !string.IsNullOrWhiteSpace(hex) && HexColorRegex().IsMatch(hex.Trim());
 
+    //регулярное выражение для безопасного идентификатора темы
     [GeneratedRegex("^[a-z0-9\\-_]+$")]
     private static partial Regex SafeIdRegex();
 
-    public static bool IsSafeId(string? id) => !string.IsNullOrWhiteSpace(id) && SafeIdRegex().IsMatch(id.Trim());
+    //проверка безопасности идентификатора темы
+    public static bool IsSafeId(string? id) =>
+        !string.IsNullOrWhiteSpace(id) && SafeIdRegex().IsMatch(id.Trim());
 
-    private static readonly HashSet<string> t_reservedDeviceNames = new(
-    [
-        "CON", "PRN", "AUX", "NUL",
-        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
-        "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
-    ], StringComparer.OrdinalIgnoreCase);
+    //зарезервированные системные имена устройств dos/windows для защиты от спецфайлов
+    private static readonly FrozenSet<string> s_reservedDeviceNames =
+        ((string[])[
+            "CON", "PRN", "AUX", "NUL",
+            "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+            "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9"
+        ]).ToFrozenSet(StringComparer.OrdinalIgnoreCase);
 
+    //проверка, совпадает ли сегмент с зарезервированным именем устройства без аллокаций
+    private static bool IsReservedDeviceName(ReadOnlySpan<char> name)
+    {
+        foreach (var reserved in s_reservedDeviceNames)
+        {
+            if (name.Equals(reserved.AsSpan(), StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+        }
+        return false;
+    }
+
+    //проверка безопасности относительного пути внутри каталога темы
     public static bool IsSafeRelativePath(string? relativePath)
     {
         if (string.IsNullOrWhiteSpace(relativePath))
@@ -35,11 +57,22 @@ public static partial class ThemeValidator
             return false;
         }
 
-        var segments = normalized.Split('/', StringSplitOptions.RemoveEmptyEntries);
-        foreach (var segment in segments)
+        //разбор сегментов пути без аллокаций массива
+        var span = normalized.AsSpan();
+        while (!span.IsEmpty)
         {
-            var nameWithoutExt = Path.GetFileNameWithoutExtension(segment);
-            if (t_reservedDeviceNames.Contains(nameWithoutExt) || t_reservedDeviceNames.Contains(segment))
+            var idx = span.IndexOf('/');
+            var segment = idx >= 0 ? span[..idx] : span;
+            span = idx >= 0 ? span[(idx + 1)..] : default;
+
+            if (segment.IsEmpty)
+            {
+                continue;
+            }
+
+            var dotIdx = segment.IndexOf('.');
+            var nameWithoutExt = dotIdx >= 0 ? segment[..dotIdx] : segment;
+            if (IsReservedDeviceName(nameWithoutExt) || IsReservedDeviceName(segment))
             {
                 return false;
             }
@@ -49,6 +82,7 @@ public static partial class ThemeValidator
         return SafeThemeExtractor.IsAllowedExtension(ext);
     }
 
+    //валидация отдельного файла ресурса на диске
     public static bool ValidateAssetFile(string fullPath, [NotNullWhen(false)] out string? errorMessage)
     {
         if (!File.Exists(fullPath))
@@ -108,6 +142,7 @@ public static partial class ThemeValidator
         }
     }
 
+    //валидация байтового массива ресурса в памяти
     public static bool ValidateAssetData(string extension, byte[] data, [NotNullWhen(false)] out string? errorMessage)
     {
         if (!SafeThemeExtractor.IsAllowedExtension(extension))
@@ -139,6 +174,7 @@ public static partial class ThemeValidator
         return true;
     }
 
+    //семантическое сравнение версий для обнаружения обновлений
     public static bool IsVersionNewer(string? currentVersion, string? remoteVersion)
     {
         if (string.IsNullOrWhiteSpace(remoteVersion))
@@ -182,6 +218,35 @@ public static partial class ThemeValidator
         return false;
     }
 
+    //проверка строковых полей на xss, html и внедренные скрипты
+    public static bool ContainsDangerousText(string? value, int maxLength = 200)
+    {
+        if (string.IsNullOrEmpty(value))
+        {
+            return false;
+        }
+
+        if (value.Length > maxLength)
+        {
+            return true;
+        }
+
+        foreach (var ch in value)
+        {
+            if (char.IsControl(ch) && ch is not ('\r' or '\n' or '\t'))
+            {
+                return true;
+            }
+        }
+
+        return value.Contains('<', StringComparison.Ordinal) ||
+                value.Contains('>', StringComparison.Ordinal) ||
+                value.Contains("javascript:", StringComparison.OrdinalIgnoreCase) ||
+                value.Contains("vbscript:", StringComparison.OrdinalIgnoreCase) ||
+                value.Contains("data:text/html", StringComparison.OrdinalIgnoreCase);
+    }
+
+    //полная проверка целостности и безопасности манифеста темы оформления
     public static bool ValidateManifest(ThemeManifest manifest, [NotNullWhen(false)] out string? errorMessage)
     {
         if (manifest == null)
@@ -190,16 +255,40 @@ public static partial class ThemeValidator
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(manifest.Id) || !IsSafeId(manifest.Id))
+        if (string.IsNullOrWhiteSpace(manifest.Id) || manifest.Id.Length > 64 || !IsSafeId(manifest.Id))
         {
-            errorMessage = $"Theme ID '{manifest.Id}' is invalid. Must contain only lowercase letters, digits, dashes, and underscores.";
+            errorMessage = $"Theme ID '{manifest.Id}' is invalid. Must contain only lowercase letters, digits, dashes, and underscores (max 64 chars).";
             return false;
         }
 
-        if (string.IsNullOrWhiteSpace(manifest.Name))
+        if (string.IsNullOrWhiteSpace(manifest.Name) || ContainsDangerousText(manifest.Name, 80))
         {
-            errorMessage = "Theme Name cannot be empty.";
+            errorMessage = "Theme Name is empty, too long, or contains prohibited characters.";
             return false;
+        }
+
+        if (ContainsDangerousText(manifest.Author, 80) || ContainsDangerousText(manifest.Description, 600))
+        {
+            errorMessage = "Theme Author or Description contains prohibited characters or exceeds length limits.";
+            return false;
+        }
+
+        if (manifest.Tags is { Count: > 20 })
+        {
+            errorMessage = "Theme cannot have more than 20 tags.";
+            return false;
+        }
+
+        if (manifest.Tags is not null)
+        {
+            foreach (var tag in manifest.Tags)
+            {
+                if (ContainsDangerousText(tag, 32))
+                {
+                    errorMessage = $"Invalid tag '{tag}'.";
+                    return false;
+                }
+            }
         }
 
         if (manifest.Core?.Colors == null)
@@ -236,7 +325,12 @@ public static partial class ThemeValidator
             manifest.Core.Colors.BorderMedium,
             manifest.Core.Colors.Success,
             manifest.Core.Colors.Warning,
-            manifest.Core.Colors.Error
+            manifest.Core.Colors.Error,
+            manifest.Vfx?.Color,
+            manifest.Vfx?.Glow?.CoreColor,
+            manifest.Vfx?.Glow?.BloomColor,
+            manifest.Vfx?.ActiveOverrides?.AccentColor,
+            manifest.Vfx?.ActiveOverrides?.GlowColor
         ];
 
         foreach (var color in optionalColors)
@@ -244,6 +338,21 @@ public static partial class ThemeValidator
             if (!string.IsNullOrEmpty(color) && !IsValidHexColor(color))
             {
                 errorMessage = $"Invalid color HEX token in theme manifest: '{color}'";
+                return false;
+            }
+        }
+
+        if (manifest.Vfx?.StatusText is { } st)
+        {
+            if (ContainsDangerousText(st.Disconnected, 64) ||
+                ContainsDangerousText(st.Connecting, 64) ||
+                ContainsDangerousText(st.Connected, 64) ||
+                ContainsDangerousText(st.Error, 64) ||
+                ContainsDangerousText(st.ButtonIdle, 32) ||
+                ContainsDangerousText(st.ButtonConnecting, 32) ||
+                ContainsDangerousText(st.ButtonConnected, 32))
+            {
+                errorMessage = "Invalid or prohibited text in vfx.statusText.";
                 return false;
             }
         }
@@ -269,7 +378,9 @@ public static partial class ThemeValidator
             manifest.Core.Sounds?.Connect,
             manifest.Core.Sounds?.Disconnect,
             manifest.Core.Sounds?.Click,
+            manifest.Core.Sounds?.Hover,
             manifest.Core.Sounds?.Notification,
+            manifest.Core.Sounds?.Ambient,
             manifest.Core.Ui?.FontFile
         ];
 
@@ -282,6 +393,24 @@ public static partial class ThemeValidator
             }
         }
 
+        if (manifest.Vfx?.ParticleSprites is { Count: > 0 } sprites)
+        {
+            if (sprites.Count > 12)
+            {
+                errorMessage = "Too many particleSprites in theme manifest (max 12).";
+                return false;
+            }
+
+            foreach (var sp in sprites)
+            {
+                if (!IsSafeRelativePath(sp))
+                {
+                    errorMessage = $"Unsafe or prohibited particleSprite path in theme manifest: '{sp}'";
+                    return false;
+                }
+            }
+        }
+
         if (manifest.Decorations?.CornerStickers is { Count: > 0 } stickers)
         {
             foreach (var p in stickers.Values)
@@ -290,6 +419,33 @@ public static partial class ThemeValidator
                 {
                     errorMessage = $"Unsafe or prohibited sticker path in theme manifest: '{p}'";
                     return false;
+                }
+            }
+        }
+
+        if (manifest.Apps is not null && manifest.Apps.TryGetValue("obxodka", out var obxApp) && obxApp.ValueKind == JsonValueKind.Object)
+        {
+            if (obxApp.TryGetProperty("sounds", out var soundsObj) && soundsObj.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in soundsObj.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.String && !IsSafeRelativePath(prop.Value.GetString()))
+                    {
+                        errorMessage = $"Unsafe sound path in apps.obxodka.sounds.{prop.Name}: '{prop.Value.GetString()}'";
+                        return false;
+                    }
+                }
+            }
+
+            if (obxApp.TryGetProperty("vpnButton", out var btnObj) && btnObj.ValueKind == JsonValueKind.Object)
+            {
+                foreach (var prop in btnObj.EnumerateObject())
+                {
+                    if (prop.Value.ValueKind == JsonValueKind.String && !IsSafeRelativePath(prop.Value.GetString()))
+                    {
+                        errorMessage = $"Unsafe button path in apps.obxodka.vpnButton.{prop.Name}: '{prop.Value.GetString()}'";
+                        return false;
+                    }
                 }
             }
         }
@@ -318,6 +474,7 @@ public static partial class ThemeValidator
         return true;
     }
 
+    //синтез гармоничного парного цвета для градиента без аллокаций строк
     public static (string startHex, string endHex) SynthesizeGradient(string baseHex)
     {
         if (!IsValidHexColor(baseHex))
@@ -327,15 +484,15 @@ public static partial class ThemeValidator
 
         try
         {
-            var hex = baseHex.TrimStart('#');
+            var hex = baseHex.AsSpan().TrimStart('#');
             if (hex.Length == 8)
             {
                 hex = hex[2..];
             }
 
-            var r = Convert.ToInt32(hex[..2], 16);
-            var g = Convert.ToInt32(hex.Substring(2, 2), 16);
-            var b = Convert.ToInt32(hex.Substring(4, 2), 16);
+            var r = int.Parse(hex[..2], NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+            var g = int.Parse(hex.Slice(2, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
+            var b = int.Parse(hex.Slice(4, 2), NumberStyles.HexNumber, CultureInfo.InvariantCulture);
 
             var r2 = Math.Clamp((int)(r * 0.75), 0, 255);
             var g2 = Math.Clamp((int)(g * 0.70), 0, 255);

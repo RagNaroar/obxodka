@@ -39,6 +39,7 @@
 		<RunAOTCompilation>false</RunAOTCompilation>
 		<AndroidEnableProfiledAot>false</AndroidEnableProfiledAot>
 		<EmbedAssembliesIntoApk>true</EmbedAssembliesIntoApk>
+		<UseNativeHttpHandler>true</UseNativeHttpHandler>
 		<JavaMaximumHeapSize Condition="'$(GITHUB_ACTIONS)' != 'true'">8G</JavaMaximumHeapSize>
 		<JavaMaximumHeapSize Condition="'$(GITHUB_ACTIONS)' == 'true'">4G</JavaMaximumHeapSize>
 		<AndroidLinkTool Condition="'$(Configuration)' == 'Release'">r8</AndroidLinkTool>
@@ -93,9 +94,6 @@
     <PackageReference Include="CommunityToolkit.Mvvm" Version="8.4.2" />
     <PackageReference Include="CommunityToolkit.Maui" Version="15.0.1" />
     <PackageReference Include="CommunityToolkit.Maui.MediaElement" Version="10.0.0" />
-    <PackageReference Include="WinDivertSharp" Version="1.4.3.2" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'">
-      <ExcludeAssets>build;buildTransitive</ExcludeAssets>
-    </PackageReference>
     <PackageReference Include="WinUIEx" Version="2.9.3" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'" />
     <PackageReference Include="System.Management" Version="10.0.12" Condition="$([MSBuild]::GetTargetPlatformIdentifier('$(TargetFramework)')) == 'windows'" />
 </ItemGroup>
@@ -109,6 +107,7 @@
     <PackageReference Include="Xamarin.AndroidX.Lifecycle.ViewModel.Ktx" Version="2.11.0.1" />
     <PackageReference Include="Xamarin.AndroidX.SavedState.SavedState.Ktx" Version="1.5.0.1" />
     <PackageReference Include="Xamarin.AndroidX.Lifecycle.Process" Version="2.11.0.1" />
+    <PackageReference Include="Xamarin.GooglePlayServices.Code.Scanner" Version="116.1.0.17" />
     <ProguardConfiguration Include="Platforms\Android\proguard.cfg" />
   </ItemGroup>
 
@@ -127,7 +126,7 @@
 
 	<Target Name="_ValidateSigningCertificate" Condition="'$(AppxPackageSigningEnabled)' == 'false'" />
 
-	<Target Name="SyncManifestVersion" BeforeTargets="BeforeBuild;BeforeRebuild;BeforePublish;_GenerateAppxManifest;PrepareForBuild" Condition="'$(IsWindows)' == 'true' and Exists('Platforms\Windows\Package.appxmanifest')">
+	<Target Name="SyncManifestVersion" BeforeTargets="BeforeBuild;BeforeRebuild;BeforePublish;_GenerateAppxManifest;PrepareForBuild" Condition="'$(IsWindows)' == 'true' and $(TargetFramework.Contains('-windows')) and Exists('Platforms\Windows\Package.appxmanifest')">
 		<XmlPoke XmlInputPath="Platforms\Windows\Package.appxmanifest" Namespaces="&lt;Namespace Prefix='m' Uri='http://schemas.microsoft.com/appx/manifest/foundation/windows10'/&gt;" Query="/m:Package/m:Identity/@Version" Value="$(AppxPackageVersion)" />
 	</Target>
 

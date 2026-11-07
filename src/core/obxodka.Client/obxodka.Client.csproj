@@ -16,6 +16,7 @@
 
   <ItemGroup>
     <ProjectReference Include="..\obxodka.Shared\obxodka.Shared.csproj" />
+    <EmbeddedResource Include="..\..\..\servers.json" LogicalName="obxodka.servers.json" />
   </ItemGroup>
 
   <ItemGroup>
